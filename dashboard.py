@@ -3,7 +3,7 @@ import sys
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QMessageBox, QStackedWidget, QScrollArea, QFrame,
-    QTableWidget, QTableWidgetItem, QFileDialog
+    QTableWidget, QTableWidgetItem, QFileDialog, QLineEdit, QComboBox
 )
 from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt
@@ -18,7 +18,7 @@ class Dashboard(QMainWindow):
     def __init__(self, db_path, username):
         super().__init__()
         self.setWindowTitle(f"SACCO Dashboard - Logged in as {username}")
-        self.setGeometry(300, 100, 1500, 900)
+        self.setGeometry(300, 100, 1600, 950)
         self.db_manager = DBManager(db_path)
 
         self.loaded_modules = {}
@@ -161,12 +161,25 @@ class Dashboard(QMainWindow):
         label.setFont(QFont("Arial", 18, QFont.Weight.Bold))
         layout.addWidget(label)
 
+        # Search/filter bar
+        filter_layout = QHBoxLayout()
+        filter_input = QLineEdit()
+        filter_input.setPlaceholderText("Search/filter table...")
+        filter_input.setFixedHeight(30)
+        filter_layout.addWidget(filter_input)
+
+        chart_type_combo = QComboBox()
+        chart_type_combo.addItems(["Line", "Bar", "Pie"])
+        filter_layout.addWidget(chart_type_combo)
+
+        layout.addLayout(filter_layout)
+
         # Add record button
         add_btn = QPushButton(f"Add New {display_name.rstrip('s')}")
         add_btn.clicked.connect(lambda _, tn=table_name: self.open_table_form(tn))
         layout.addWidget(add_btn)
 
-        # Table view
+        # Table
         table_widget = QTableWidget()
         table_widget.setAlternatingRowColors(True)
         table_widget.setSortingEnabled(True)
@@ -177,15 +190,18 @@ class Dashboard(QMainWindow):
         # Charts
         chart = FigureCanvas(Figure(figsize=(5, 3)))
         ax = chart.figure.subplots()
-        self.update_chart(ax, table_name)
         layout.addWidget(chart)
 
-        # Summary dashboard for Finance & Loans
+        # Summary chart for Finance/Loans
         if table_name in ["LedgerTbl", "LoansAndPurchasesTbl"]:
             summary_canvas = FigureCanvas(Figure(figsize=(5, 2)))
             summary_ax = summary_canvas.figure.subplots()
             self.update_summary_chart(summary_ax, table_name)
             layout.addWidget(summary_canvas)
+
+        # Connect dynamic filtering and chart updates
+        filter_input.textChanged.connect(lambda text, tw=table_widget, ax=ax, tn=table_name, combo=chart_type_combo: self.filter_and_update(tw, ax, tn, text, combo))
+        chart_type_combo.currentTextChanged.connect(lambda ctype, tw=table_widget, ax=ax, tn=table_name: self.filter_and_update(tw, ax, tn, "", chart_type_combo))
 
         # Buttons
         btn_layout = QHBoxLayout()
@@ -201,7 +217,11 @@ class Dashboard(QMainWindow):
         self.stack.setCurrentWidget(module_page)
         self.loaded_modules[table_name] = module_page
 
-    def populate_table_widget(self, table_widget, table_name):
+    def filter_and_update(self, table_widget, ax, table_name, filter_text, chart_combo):
+        self.populate_table_widget(table_widget, table_name, filter_text)
+        self.update_chart(ax, table_name, chart_combo.currentText())
+
+    def populate_table_widget(self, table_widget, table_name, filter_text=""):
         data = self.db_manager.fetch_all(table_name)
         if not data:
             table_widget.setRowCount(0)
@@ -210,28 +230,56 @@ class Dashboard(QMainWindow):
         headers = list(data[0].keys())
         table_widget.setColumnCount(len(headers))
         table_widget.setHorizontalHeaderLabels(headers)
-        table_widget.setRowCount(len(data))
-        for row_idx, row in enumerate(data):
+
+        filtered_data = []
+        if filter_text:
+            filter_text = filter_text.lower()
+            for row in data:
+                if any(filter_text in str(v).lower() for v in row.values()):
+                    filtered_data.append(row)
+        else:
+            filtered_data = data
+
+        table_widget.setRowCount(len(filtered_data))
+        for row_idx, row in enumerate(filtered_data):
             for col_idx, key in enumerate(headers):
                 table_widget.setItem(row_idx, col_idx, QTableWidgetItem(str(row[key])))
         table_widget.resizeColumnsToContents()
 
     def refresh_module(self, table_widget, ax, table_name):
         self.populate_table_widget(table_widget, table_name)
-        self.update_chart(ax, table_name)
+        self.update_chart(ax, table_name, "Line")
 
-    def update_chart(self, ax, table_name):
+    def update_chart(self, ax, table_name, chart_type="Line"):
         ax.clear()
         data = self.db_manager.fetch_all(table_name)
-        if data:
-            numeric_cols = [k for k, v in data[0].items() if isinstance(v, (int, float))]
-            if numeric_cols:
-                x = list(range(1, len(data)+1))
-                for col in numeric_cols:
-                    y = [row[col] for row in data]
-                    ax.plot(x, y, marker='o', label=col)
-                ax.set_title(f"Numeric Data Overview")
-                ax.legend()
+        if not data:
+            ax.figure.canvas.draw()
+            return
+
+        numeric_cols = [k for k, v in data[0].items() if isinstance(v, (int, float))]
+        if not numeric_cols:
+            ax.figure.canvas.draw()
+            return
+
+        x = list(range(1, len(data)+1))
+        if chart_type == "Line":
+            for col in numeric_cols:
+                y = [row[col] for row in data]
+                ax.plot(x, y, marker='o', label=col)
+        elif chart_type == "Bar":
+            for idx, col in enumerate(numeric_cols):
+                y = [row[col] for row in data]
+                ax.bar([i+idx*0.2 for i in x], y, width=0.2, label=col)
+        elif chart_type == "Pie" and numeric_cols:
+            col = numeric_cols[0]
+            totals = sum(row[col] for row in data)
+            if totals > 0:
+                sizes = [row[col] for row in data]
+                ax.pie(sizes, labels=[str(i+1) for i in range(len(data))], autopct="%1.1f%%")
+
+        ax.set_title(f"{chart_type} Chart Overview")
+        ax.legend()
         ax.figure.canvas.draw()
 
     def update_summary_chart(self, ax, table_name):
@@ -241,13 +289,11 @@ class Dashboard(QMainWindow):
             return
         df = pd.DataFrame(data)
         if table_name == "LedgerTbl":
-            # Example: Pie chart of debit vs credit
             if "Debit" in df.columns and "Credit" in df.columns:
                 totals = [df["Debit"].sum(), df["Credit"].sum()]
                 ax.pie(totals, labels=["Debit", "Credit"], autopct="%1.1f%%", colors=["#ff9999", "#66b3ff"])
                 ax.set_title("Ledger Summary")
         elif table_name == "LoansAndPurchasesTbl":
-            # Example: Bar chart by Loan Amount
             if "Amount" in df.columns:
                 ax.bar(range(len(df)), df["Amount"], color="#99ff99")
                 ax.set_title("Loans/Purchases Overview")
