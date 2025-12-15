@@ -1,36 +1,43 @@
 # login.py
 import sys
 import os
+import hashlib
+
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QLineEdit, QPushButton,
     QVBoxLayout, QHBoxLayout, QFileDialog, QMessageBox
 )
-from db_manager import DBManager  # Make sure this exists and handles SQLite connections
+
+from db_manager import DBManager
+from dashboard import Dashboard
 
 
 class LoginWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("SACCO Login")
-        self.setGeometry(600, 300, 500, 300)
+        self.setGeometry(600, 300, 500, 320)
+
         self.db_manager = None
         self.db_path = ""
 
         self.init_ui()
 
+    # ---------------- UI ----------------
+
     def init_ui(self):
         layout = QVBoxLayout()
 
-        # Database file info
         self.db_label = QLabel("Database: None selected")
         select_db_btn = QPushButton("Select Existing Database")
         select_db_btn.clicked.connect(self.select_database)
+
         layout.addWidget(self.db_label)
         layout.addWidget(select_db_btn)
 
-        # Username and Password
         self.username_input = QLineEdit()
         self.username_input.setPlaceholderText("Username")
+
         self.password_input = QLineEdit()
         self.password_input.setPlaceholderText("Password")
         self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
@@ -40,17 +47,20 @@ class LoginWindow(QWidget):
         layout.addWidget(QLabel("Password"))
         layout.addWidget(self.password_input)
 
-        # Buttons
-        button_layout = QHBoxLayout()
+        btns = QHBoxLayout()
         login_btn = QPushButton("Login")
         login_btn.clicked.connect(self.login)
+
         create_btn = QPushButton("Create New User")
         create_btn.clicked.connect(self.create_user)
-        button_layout.addWidget(login_btn)
-        button_layout.addWidget(create_btn)
 
-        layout.addLayout(button_layout)
+        btns.addWidget(login_btn)
+        btns.addWidget(create_btn)
+
+        layout.addLayout(btns)
         self.setLayout(layout)
+
+    # ---------------- DATABASE ----------------
 
     def select_database(self):
         file_path, _ = QFileDialog.getOpenFileName(
@@ -59,30 +69,95 @@ class LoginWindow(QWidget):
             "",
             "Database Files (*.sld *.db *.sqlite)"
         )
-        if file_path:
-            self.db_path = os.path.abspath(file_path)  # Full path
-            self.db_label.setText(f"Database: {self.db_path}")
-            self.db_manager = DBManager(self.db_path)
-            QMessageBox.information(self, "Database Loaded", f"Loaded database:\n{self.db_path}")
+        if not file_path:
+            return
+
+        self.db_path = os.path.abspath(file_path)
+        self.db_label.setText(f"Database: {self.db_path}")
+        self.db_manager = DBManager(self.db_path)
+
+        self.ensure_login_table()
+        QMessageBox.information(self, "Database Loaded", f"Loaded:\n{self.db_path}")
+
+    def ensure_login_table(self):
+        """Auto-create LoginTbl if missing (safe, non-destructive)."""
+        if "LoginTbl" not in self.db_manager.get_tables():
+            self.db_manager.execute("""
+                CREATE TABLE LoginTbl (
+                    Username TEXT PRIMARY KEY,
+                    Password TEXT NOT NULL,
+                    Status TEXT,
+                    Maintain INTEGER DEFAULT 0,
+                    Operations INTEGER DEFAULT 0,
+                    EditPriv INTEGER DEFAULT 0,
+                    Reports INTEGER DEFAULT 0
+                )
+            """)
+
+    # ---------------- AUTH ----------------
+
+    def hash_password(self, password: str) -> str:
+        return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
     def login(self):
         if not self.db_manager:
             QMessageBox.warning(self, "Error", "Please select a database first.")
             return
+
         username = self.username_input.text().strip()
         password = self.password_input.text().strip()
+
         if not username or not password:
             QMessageBox.warning(self, "Error", "Please enter username and password.")
             return
 
+        hashed = self.hash_password(password)
+
+        # Try hashed login first
         users = self.db_manager.fetch_all(
-            "LoginTbl", "Username=? AND Password=?", (username, password)
+            "LoginTbl", "Username=? AND Password=?", (username, hashed)
         )
-        if users:
-            QMessageBox.information(self, "Success", f"Login successful! Welcome {username}.")
-            # TODO: Open Main Dashboard here
-        else:
-            QMessageBox.warning(self, "Error", "Invalid username or password.")
+
+        # Backward compatibility: plain-text legacy login
+        if not users:
+            legacy = self.db_manager.fetch_all(
+                "LoginTbl", "Username=? AND Password=?", (username, password)
+            )
+            if legacy:
+                # Auto-upgrade password to hashed
+                self.db_manager.update(
+                    "LoginTbl",
+                    {"Password": hashed},
+                    "Username=?",
+                    (username,)
+                )
+                users = legacy
+
+        if not users:
+            QMessageBox.warning(self, "Login Failed", "Invalid username or password.")
+            return
+
+        user = users[0]
+        QMessageBox.information(self, "Success", f"Welcome {username}")
+
+        self.open_dashboard(username, user)
+
+    def open_dashboard(self, username, user_record):
+        self.dashboard = Dashboard(self.db_path, username)
+
+        # Optional: attach permissions for later enforcement
+        self.dashboard.user_permissions = {
+            "Status": user_record.get("Status"),
+            "Maintain": int(user_record.get("Maintain", 0)),
+            "Operations": int(user_record.get("Operations", 0)),
+            "EditPriv": int(user_record.get("EditPriv", 0)),
+            "Reports": int(user_record.get("Reports", 0)),
+        }
+
+        self.dashboard.show()
+        self.close()
+
+    # ---------------- USER CREATION ----------------
 
     def create_user(self):
         if not self.db_manager:
@@ -91,8 +166,9 @@ class LoginWindow(QWidget):
 
         username = self.username_input.text().strip()
         password = self.password_input.text().strip()
+
         if not username or not password:
-            QMessageBox.warning(self, "Error", "Please enter username and password.")
+            QMessageBox.warning(self, "Error", "Username and password required.")
             return
 
         existing = self.db_manager.fetch_all("LoginTbl", "Username=?", (username,))
@@ -102,15 +178,18 @@ class LoginWindow(QWidget):
 
         self.db_manager.insert("LoginTbl", {
             "Username": username,
-            "Password": password,
+            "Password": self.hash_password(password),
             "Status": "User",
-            "Maintain": "0",
-            "Operations": "0",
-            "EditPriv": "0",
-            "Reports": "0"
+            "Maintain": 0,
+            "Operations": 0,
+            "EditPriv": 0,
+            "Reports": 0
         })
-        QMessageBox.information(self, "Success", f"User '{username}' created successfully!")
 
+        QMessageBox.information(self, "Success", f"User '{username}' created successfully.")
+
+
+# ---------------- MAIN ----------------
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
