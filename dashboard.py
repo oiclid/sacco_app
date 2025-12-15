@@ -1,4 +1,4 @@
-# dashboard.py
+# dashboard.py (enhanced with UserAdmin integration)
 import sys
 from datetime import datetime
 
@@ -13,6 +13,7 @@ from PyQt6.QtCore import Qt, QDate
 
 from db_manager import DBManager
 from table_form import TableForm
+from user_admin import UserAdminWindow
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -37,14 +38,16 @@ class Dashboard(QMainWindow):
             "AccountTypesTbl": "Account Types",
             "LoansAndPurchasesTbl": "Loans & Purchases",
             "PayOrWithdrawTbl": "Transactions",
-            "LedgerTbl": "Ledger"
+            "LedgerTbl": "Ledger",
+            "UserAdmin": "User Management"  # new admin module
         }
 
         self.categories = {
             "Accounts": ["AccountTypesTbl"],
             "Members": ["MemberDataTbl"],
             "Operations": ["StationDB", "LoansAndPurchasesTbl", "PayOrWithdrawTbl"],
-            "Finance": ["LedgerTbl"]
+            "Finance": ["LedgerTbl"],
+            "Admin": ["UserAdmin"]  # admin category
         }
 
         self.init_ui()
@@ -56,7 +59,6 @@ class Dashboard(QMainWindow):
         main_layout = QHBoxLayout(main_widget)
         self.setCentralWidget(main_widget)
 
-        # Sidebar
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         sidebar_container = QWidget()
@@ -64,7 +66,6 @@ class Dashboard(QMainWindow):
         scroll.setWidget(sidebar_container)
         main_layout.addWidget(scroll, 1)
 
-        # Main stack area
         self.stack = QStackedWidget()
         main_layout.addWidget(self.stack, 4)
 
@@ -97,7 +98,8 @@ class Dashboard(QMainWindow):
             self.sidebar_layout.addWidget(cat)
 
             for table in tables:
-                if table not in self.db_manager.get_tables():
+                # For database tables, check existence; for admin modules, allow directly
+                if table != "UserAdmin" and table not in self.db_manager.get_tables():
                     continue
                 btn = QPushButton(self.modules_friendly.get(table, table))
                 btn.setFixedHeight(40)
@@ -116,6 +118,12 @@ class Dashboard(QMainWindow):
 
     # ---------------- MODULE LOADING ----------------
     def load_module(self, table_name):
+        # Admin module: open in separate window
+        if table_name == "UserAdmin":
+            self.user_admin_window = UserAdminWindow(self.db_manager)
+            self.user_admin_window.show()
+            return
+
         if table_name in self.loaded_modules:
             self.stack.setCurrentWidget(self.loaded_modules[table_name])
             return
@@ -132,7 +140,6 @@ class Dashboard(QMainWindow):
         title.setFont(QFont("Arial", 18, QFont.Weight.Bold))
         layout.addWidget(title)
 
-        # Filters & chart type
         filter_layout = QHBoxLayout()
         text_filter = QLineEdit()
         text_filter.setPlaceholderText("Global search...")
@@ -158,14 +165,12 @@ class Dashboard(QMainWindow):
         ax = canvas.figure.subplots()
         layout.addWidget(canvas)
 
-        # Buttons
         btns = QHBoxLayout()
         btns.addWidget(QPushButton("Refresh", clicked=lambda: self.refresh(table, ax, table_name)))
         btns.addWidget(QPushButton("Export CSV", clicked=lambda: self.export_csv(table)))
         btns.addWidget(QPushButton("Export PDF", clicked=lambda: self.export_pdf(table)))
         layout.addLayout(btns)
 
-        # Connect filters
         text_filter.textChanged.connect(lambda t: self.apply_filters(table, ax, table_name, t, chart_type))
         chart_type.currentTextChanged.connect(lambda _: self.apply_filters(table, ax, table_name, text_filter.text(), chart_type))
 
@@ -176,11 +181,10 @@ class Dashboard(QMainWindow):
         self.stack.setCurrentWidget(page)
         self.loaded_modules[table_name] = page
 
-    # ---------------- FILTERS ----------------
+    # ---------------- FILTERS / TABLE / CHART / EXPORT / UTILS ----------------
     def build_column_filters(self, data, table, table_name):
         layout = QHBoxLayout()
         self.column_filters[table_name] = {}
-
         for col, sample in data[0].items():
             box = QVBoxLayout()
             box.addWidget(QLabel(col))
@@ -210,16 +214,13 @@ class Dashboard(QMainWindow):
             box.addWidget(mx)
             layout.addLayout(box)
             self.column_filters[table_name][col] = (mn, mx)
-
         return layout
 
     def apply_filters(self, table, ax, table_name, text="", chart_type=None):
         data = self.db_manager.fetch_all(table_name)
         df = pd.DataFrame(data)
-
         if text:
             df = df[df.apply(lambda r: r.astype(str).str.contains(text, case=False).any(), axis=1)]
-
         for col, (mn, mx) in self.column_filters.get(table_name, {}).items():
             if isinstance(mn, QSpinBox):
                 df = df[(df[col] >= mn.value()) & (df[col] <= mx.value())]
@@ -229,12 +230,10 @@ class Dashboard(QMainWindow):
                 df[col] = pd.to_datetime(df[col], errors='coerce')
                 df = df[(df[col] >= pd.to_datetime(mn.date().toPyDate())) &
                         (df[col] <= pd.to_datetime(mx.date().toPyDate()))]
-
         self.populate_table(table, df.to_dict("records"))
         if ax and chart_type:
             self.update_chart(ax, df.to_dict("records"), chart_type.currentText() if hasattr(chart_type, "currentText") else chart_type)
 
-    # ---------------- TABLE & CHART ----------------
     def populate_table(self, table, data):
         table.clear()
         if not data:
@@ -267,7 +266,6 @@ class Dashboard(QMainWindow):
             nums.sum().plot(kind="pie", ax=ax, autopct="%1.1f%%")
         ax.figure.canvas.draw()
 
-    # ---------------- EXPORT ----------------
     def export_csv(self, table):
         path, _ = QFileDialog.getSaveFileName(self, "CSV", "", "*.csv")
         if not path:
@@ -290,7 +288,6 @@ class Dashboard(QMainWindow):
             pdf.ln()
         pdf.output(path)
 
-    # ---------------- UTILS ----------------
     def is_date(self, val):
         try:
             datetime.fromisoformat(str(val))

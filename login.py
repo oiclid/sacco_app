@@ -6,11 +6,15 @@ from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QLineEdit, QPushButton,
     QVBoxLayout, QHBoxLayout, QFileDialog, QMessageBox
 )
+from PyQt6.QtCore import pyqtSignal
 from db_manager import DBManager
 from dashboard import Dashboard
 
 
 class LoginWindow(QWidget):
+    # Signal emitted after successful login
+    login_successful = pyqtSignal(str)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("SACCO Login")
@@ -63,6 +67,7 @@ class LoginWindow(QWidget):
         QMessageBox.information(self, "Database Loaded", f"Loaded:\n{self.db_path}")
 
     def ensure_login_table(self):
+        """Create LoginTbl if missing."""
         if "LoginTbl" not in self.db_manager.get_tables():
             self.db_manager.execute_query("""
                 CREATE TABLE LoginTbl (
@@ -89,32 +94,25 @@ class LoginWindow(QWidget):
         if not username or not password:
             QMessageBox.warning(self, "Error", "Please enter username and password.")
             return
+
         hashed = self.hash_password(password)
         users = self.db_manager.fetch_all("LoginTbl", "Username=? AND Password=?", (username, hashed))
+        
+        # Legacy plain-text support
         if not users:
-            # Legacy plain-text support
             legacy = self.db_manager.fetch_all("LoginTbl", "Username=? AND Password=?", (username, password))
             if legacy:
+                # Auto-upgrade password
                 self.db_manager.update("LoginTbl", {"Password": hashed}, "Username=?", (username,))
                 users = legacy
+
         if not users:
             QMessageBox.warning(self, "Login Failed", "Invalid username or password.")
             return
-        user = users[0]
-        QMessageBox.information(self, "Success", f"Welcome {username}")
-        self.open_dashboard(username, user)
 
-    def open_dashboard(self, username, user_record):
-        self.dashboard = Dashboard(self.db_path, username)
-        self.dashboard.user_permissions = {
-            "Status": user_record.get("Status"),
-            "Maintain": int(user_record.get("Maintain", 0)),
-            "Operations": int(user_record.get("Operations", 0)),
-            "EditPriv": int(user_record.get("EditPriv", 0)),
-            "Reports": int(user_record.get("Reports", 0)),
-        }
-        self.dashboard.show()
-        self.close()
+        QMessageBox.information(self, "Success", f"Welcome {username}")
+        # Emit signal instead of opening dashboard directly
+        self.login_successful.emit(username)
 
     # ---------------- USER CREATION ----------------
     def create_user(self):
