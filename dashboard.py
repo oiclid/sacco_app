@@ -12,6 +12,7 @@ from table_form import TableForm
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
 import pandas as pd
+from fpdf import FPDF
 
 
 class Dashboard(QMainWindow):
@@ -65,7 +66,6 @@ class Dashboard(QMainWindow):
         self.show_welcome_page()
 
     def build_sidebar(self):
-        # Clear sidebar
         for i in reversed(range(self.sidebar_layout.count())):
             widget = self.sidebar_layout.itemAt(i).widget()
             if widget:
@@ -192,26 +192,29 @@ class Dashboard(QMainWindow):
         ax = chart.figure.subplots()
         layout.addWidget(chart)
 
-        # Summary chart for Finance/Loans
+        # Summary chart
         if table_name in ["LedgerTbl", "LoansAndPurchasesTbl"]:
             summary_canvas = FigureCanvas(Figure(figsize=(5, 2)))
             summary_ax = summary_canvas.figure.subplots()
             self.update_summary_chart(summary_ax, table_name)
             layout.addWidget(summary_canvas)
 
-        # Connect dynamic filtering and chart updates
-        filter_input.textChanged.connect(lambda text, tw=table_widget, ax=ax, tn=table_name, combo=chart_type_combo: self.filter_and_update(tw, ax, tn, text, combo))
-        chart_type_combo.currentTextChanged.connect(lambda ctype, tw=table_widget, ax=ax, tn=table_name: self.filter_and_update(tw, ax, tn, "", chart_type_combo))
-
         # Buttons
         btn_layout = QHBoxLayout()
         refresh_btn = QPushButton("Refresh")
         refresh_btn.clicked.connect(lambda _, tw=table_widget, ax=ax, tn=table_name: self.refresh_module(tw, ax, tn))
-        export_btn = QPushButton("Export CSV")
-        export_btn.clicked.connect(lambda _, tw=table_widget: self.export_table_csv(tw))
+        export_csv_btn = QPushButton("Export CSV")
+        export_csv_btn.clicked.connect(lambda _, tw=table_widget: self.export_table_csv(tw))
+        export_pdf_btn = QPushButton("Export PDF")
+        export_pdf_btn.clicked.connect(lambda _, tw=table_widget: self.export_table_pdf(tw))
         btn_layout.addWidget(refresh_btn)
-        btn_layout.addWidget(export_btn)
+        btn_layout.addWidget(export_csv_btn)
+        btn_layout.addWidget(export_pdf_btn)
         layout.addLayout(btn_layout)
+
+        # Dynamic filtering
+        filter_input.textChanged.connect(lambda text, tw=table_widget, ax=ax, tn=table_name, combo=chart_type_combo: self.filter_and_update(tw, ax, tn, text, combo))
+        chart_type_combo.currentTextChanged.connect(lambda ctype, tw=table_widget, ax=ax, tn=table_name: self.filter_and_update(tw, ax, tn, "", chart_type_combo))
 
         self.stack.addWidget(module_page)
         self.stack.setCurrentWidget(module_page)
@@ -256,7 +259,6 @@ class Dashboard(QMainWindow):
         if not data:
             ax.figure.canvas.draw()
             return
-
         numeric_cols = [k for k, v in data[0].items() if isinstance(v, (int, float))]
         if not numeric_cols:
             ax.figure.canvas.draw()
@@ -271,11 +273,10 @@ class Dashboard(QMainWindow):
             for idx, col in enumerate(numeric_cols):
                 y = [row[col] for row in data]
                 ax.bar([i+idx*0.2 for i in x], y, width=0.2, label=col)
-        elif chart_type == "Pie" and numeric_cols:
+        elif chart_type == "Pie":
             col = numeric_cols[0]
-            totals = sum(row[col] for row in data)
-            if totals > 0:
-                sizes = [row[col] for row in data]
+            sizes = [row[col] for row in data]
+            if sum(sizes) > 0:
                 ax.pie(sizes, labels=[str(i+1) for i in range(len(data))], autopct="%1.1f%%")
 
         ax.set_title(f"{chart_type} Chart Overview")
@@ -288,15 +289,13 @@ class Dashboard(QMainWindow):
         if not data:
             return
         df = pd.DataFrame(data)
-        if table_name == "LedgerTbl":
-            if "Debit" in df.columns and "Credit" in df.columns:
-                totals = [df["Debit"].sum(), df["Credit"].sum()]
-                ax.pie(totals, labels=["Debit", "Credit"], autopct="%1.1f%%", colors=["#ff9999", "#66b3ff"])
-                ax.set_title("Ledger Summary")
-        elif table_name == "LoansAndPurchasesTbl":
-            if "Amount" in df.columns:
-                ax.bar(range(len(df)), df["Amount"], color="#99ff99")
-                ax.set_title("Loans/Purchases Overview")
+        if table_name == "LedgerTbl" and "Debit" in df.columns and "Credit" in df.columns:
+            totals = [df["Debit"].sum(), df["Credit"].sum()]
+            ax.pie(totals, labels=["Debit", "Credit"], autopct="%1.1f%%", colors=["#ff9999", "#66b3ff"])
+            ax.set_title("Ledger Summary")
+        elif table_name == "LoansAndPurchasesTbl" and "Amount" in df.columns:
+            ax.bar(range(len(df)), df["Amount"], color="#99ff99")
+            ax.set_title("Loans/Purchases Overview")
         ax.figure.canvas.draw()
 
     def export_table_csv(self, table_widget):
@@ -307,6 +306,29 @@ class Dashboard(QMainWindow):
                               columns=[table_widget.horizontalHeaderItem(c).text() 
                                        for c in range(table_widget.columnCount())])
             df.to_csv(path, index=False)
+            QMessageBox.information(self, "Exported", f"Data exported to {path}")
+
+    def export_table_pdf(self, table_widget):
+        path, _ = QFileDialog.getSaveFileName(self, "Export PDF", "", "PDF Files (*.pdf)")
+        if path:
+            pdf = FPDF()
+            pdf.add_page()
+            pdf.set_font("Arial", size=10)
+            cols = [table_widget.horizontalHeaderItem(c).text() for c in range(table_widget.columnCount())]
+            row_count = table_widget.rowCount()
+
+            # Header
+            for col in cols:
+                pdf.cell(40, 10, str(col), 1)
+            pdf.ln()
+
+            # Rows
+            for r in range(row_count):
+                for c in range(len(cols)):
+                    pdf.cell(40, 10, str(table_widget.item(r, c).text()), 1)
+                pdf.ln()
+
+            pdf.output(path)
             QMessageBox.information(self, "Exported", f"Data exported to {path}")
 
     def open_table_form(self, table_name, record=None):
