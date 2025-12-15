@@ -3,6 +3,7 @@ import sqlite3
 import shutil
 import os
 from typing import List, Dict, Any, Tuple
+from contextlib import contextmanager
 
 
 class DBManager:
@@ -18,11 +19,7 @@ class DBManager:
         self.ensure_tables_exist()
 
     def ensure_tables_exist(self):
-        """
-        Ensure all core tables exist. If not, create them.
-        This is where future migrations will also be handled.
-        """
-        # Example for essential tables (can extend for all tables)
+        """Ensure all core tables exist."""
         self.cursor.execute("""
             CREATE TABLE IF NOT EXISTS LoginTbl (
                 Username TEXT PRIMARY KEY,
@@ -38,9 +35,7 @@ class DBManager:
 
     def get_tables(self) -> List[str]:
         """Return a list of all table names."""
-        self.cursor.execute(
-            "SELECT name FROM sqlite_master WHERE type='table';"
-        )
+        self.cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
         return [row["name"] for row in self.cursor.fetchall()]
 
     def get_columns(self, table_name: str) -> List[Dict[str, Any]]:
@@ -64,8 +59,25 @@ class DBManager:
         if where:
             query += f" WHERE {where}"
         self.cursor.execute(query, params)
-        rows = [dict(row) for row in self.cursor.fetchall()]
-        return rows
+        return [dict(row) for row in self.cursor.fetchall()]
+
+    def fetch_one(self, table_name: str, where: str = "", params: Tuple = ()) -> Dict[str, Any]:
+        """Fetch a single row."""
+        query = f"SELECT * FROM {table_name}"
+        if where:
+            query += f" WHERE {where}"
+        self.cursor.execute(query, params)
+        row = self.cursor.fetchone()
+        return dict(row) if row else None
+
+    def fetch_value(self, table_name: str, column: str, where: str = "", params: Tuple = ()) -> Any:
+        """Fetch a single value."""
+        query = f"SELECT {column} FROM {table_name}"
+        if where:
+            query += f" WHERE {where}"
+        self.cursor.execute(query, params)
+        row = self.cursor.fetchone()
+        return row[0] if row else None
 
     def insert(self, table_name: str, data: Dict[str, Any]):
         """Insert a row into a table."""
@@ -101,18 +113,13 @@ class DBManager:
 
     @staticmethod
     def import_existing_database(existing_path: str, new_path: str):
-        """
-        Copy an existing SQLite database file to the app directory.
-        :param existing_path: Path of existing .sld/.db/.sqlite file
-        :param new_path: Destination path
-        """
+        """Copy an existing SQLite database file."""
         if not os.path.exists(existing_path):
             raise FileNotFoundError(f"Source database not found: {existing_path}")
         shutil.copy(existing_path, new_path)
 
-    # Example: Add a safe migration
     def add_column_if_not_exists(self, table_name: str, column_name: str, column_type: str, default_value: Any = None):
-        """Add a new column if it doesn't exist (safe for migrations)."""
+        """Add a new column if it doesn't exist."""
         existing_cols = [col['name'] for col in self.get_columns(table_name)]
         if column_name not in existing_cols:
             default = f"DEFAULT '{default_value}'" if default_value is not None else ""
@@ -120,14 +127,8 @@ class DBManager:
             self.cursor.execute(query)
             self.conn.commit()
 
-
     def create_table_if_not_exists(self, table_name: str, columns: Dict[str, str], primary_key: str = None):
-        """
-        Create a table dynamically if it doesn't exist.
-        :param table_name: Name of the table
-        :param columns: Dict of column_name: column_type
-        :param primary_key: Optional primary key column
-        """
+        """Create a table dynamically if it doesn't exist."""
         cols_def = []
         for col, col_type in columns.items():
             col_def = f"{col} {col_type}"
@@ -137,53 +138,30 @@ class DBManager:
         query = f"CREATE TABLE IF NOT EXISTS {table_name} ({', '.join(cols_def)})"
         self.cursor.execute(query)
         self.conn.commit()
+
     def ensure_columns(self, table_name: str, required_columns: Dict[str, str]):
-        """
-        Ensure a table has all required columns. Adds missing columns safely.
-        :param required_columns: Dict of column_name: column_type
-        """
+        """Ensure a table has all required columns."""
         existing = {col['name'] for col in self.get_columns(table_name)}
         for col_name, col_type in required_columns.items():
             if col_name not in existing:
                 self.add_column_if_not_exists(table_name, col_name, col_type)
+
     def execute_query(self, query: str, params: Tuple = ()) -> List[Dict[str, Any]]:
-        """Execute a custom query safely and return results as dicts."""
+        """Execute a custom query safely and return results."""
         self.cursor.execute(query, params)
         self.conn.commit()
         return [dict(row) for row in self.cursor.fetchall()]
 
-    from contextlib import contextmanager
-
     @contextmanager
     def transaction(self):
-        """
-        Context manager for safe transaction handling.
-        Usage:
-            with db.transaction():
-                db.insert(...)
-                db.update(...)
-        """
+        """Context manager for safe transaction handling."""
         try:
             yield
             self.conn.commit()
         except Exception as e:
             self.conn.rollback()
             raise e
-    def fetch_one(self, table_name: str, where: str = "", params: Tuple = ()) -> Dict[str, Any]:
-        query = f"SELECT * FROM {table_name}"
-        if where:
-            query += f" WHERE {where}"
-        self.cursor.execute(query, params)
-        row = self.cursor.fetchone()
-        return dict(row) if row else None
 
-    def fetch_value(self, table_name: str, column: str, where: str = "", params: Tuple = ()) -> Any:
-        query = f"SELECT {column} FROM {table_name}"
-        if where:
-            query += f" WHERE {where}"
-        self.cursor.execute(query, params)
-        row = self.cursor.fetchone()
-        return row[0] if row else None
     def get_table_info(self) -> List[Dict[str, Any]]:
         """Return all tables with row counts."""
         tables = self.get_tables()

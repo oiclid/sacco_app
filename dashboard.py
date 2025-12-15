@@ -51,12 +51,12 @@ class Dashboard(QMainWindow):
         self.apply_styles()
 
     # ---------------- UI SETUP ----------------
-
     def init_ui(self):
         main_widget = QWidget()
         main_layout = QHBoxLayout(main_widget)
         self.setCentralWidget(main_widget)
 
+        # Sidebar
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         sidebar_container = QWidget()
@@ -64,6 +64,7 @@ class Dashboard(QMainWindow):
         scroll.setWidget(sidebar_container)
         main_layout.addWidget(scroll, 1)
 
+        # Main stack area
         self.stack = QStackedWidget()
         main_layout.addWidget(self.stack, 4)
 
@@ -79,7 +80,6 @@ class Dashboard(QMainWindow):
         """)
 
     # ---------------- SIDEBAR ----------------
-
     def build_sidebar(self):
         while self.sidebar_layout.count():
             w = self.sidebar_layout.takeAt(0).widget()
@@ -115,7 +115,6 @@ class Dashboard(QMainWindow):
         self.sidebar_layout.addStretch()
 
     # ---------------- MODULE LOADING ----------------
-
     def load_module(self, table_name):
         if table_name in self.loaded_modules:
             self.stack.setCurrentWidget(self.loaded_modules[table_name])
@@ -133,6 +132,7 @@ class Dashboard(QMainWindow):
         title.setFont(QFont("Arial", 18, QFont.Weight.Bold))
         layout.addWidget(title)
 
+        # Filters & chart type
         filter_layout = QHBoxLayout()
         text_filter = QLineEdit()
         text_filter.setPlaceholderText("Global search...")
@@ -158,12 +158,14 @@ class Dashboard(QMainWindow):
         ax = canvas.figure.subplots()
         layout.addWidget(canvas)
 
+        # Buttons
         btns = QHBoxLayout()
         btns.addWidget(QPushButton("Refresh", clicked=lambda: self.refresh(table, ax, table_name)))
         btns.addWidget(QPushButton("Export CSV", clicked=lambda: self.export_csv(table)))
         btns.addWidget(QPushButton("Export PDF", clicked=lambda: self.export_pdf(table)))
         layout.addLayout(btns)
 
+        # Connect filters
         text_filter.textChanged.connect(lambda t: self.apply_filters(table, ax, table_name, t, chart_type))
         chart_type.currentTextChanged.connect(lambda _: self.apply_filters(table, ax, table_name, text_filter.text(), chart_type))
 
@@ -175,7 +177,6 @@ class Dashboard(QMainWindow):
         self.loaded_modules[table_name] = page
 
     # ---------------- FILTERS ----------------
-
     def build_column_filters(self, data, table, table_name):
         layout = QHBoxLayout()
         self.column_filters[table_name] = {}
@@ -200,8 +201,10 @@ class Dashboard(QMainWindow):
                 continue
 
             for w in (mn, mx):
-                w.valueChanged.connect(lambda _, t=table_name: self.apply_filters(table, None, t))
-                w.dateChanged.connect(lambda _, t=table_name: self.apply_filters(table, None, t)) if isinstance(w, QDateEdit) else None
+                if isinstance(w, (QSpinBox, QDoubleSpinBox)):
+                    w.valueChanged.connect(lambda _, t=table_name: self.apply_filters(table, None, t))
+                elif isinstance(w, QDateEdit):
+                    w.dateChanged.connect(lambda _, t=table_name: self.apply_filters(table, None, t))
 
             box.addWidget(mn)
             box.addWidget(mx)
@@ -223,19 +226,20 @@ class Dashboard(QMainWindow):
             elif isinstance(mn, QDoubleSpinBox):
                 df = df[(df[col] >= mn.value()) & (df[col] <= mx.value())]
             elif isinstance(mn, QDateEdit):
-                df[col] = pd.to_datetime(df[col])
+                df[col] = pd.to_datetime(df[col], errors='coerce')
                 df = df[(df[col] >= pd.to_datetime(mn.date().toPyDate())) &
                         (df[col] <= pd.to_datetime(mx.date().toPyDate()))]
 
         self.populate_table(table, df.to_dict("records"))
         if ax and chart_type:
-            self.update_chart(ax, df.to_dict("records"), chart_type.currentText())
+            self.update_chart(ax, df.to_dict("records"), chart_type.currentText() if hasattr(chart_type, "currentText") else chart_type)
 
     # ---------------- TABLE & CHART ----------------
-
     def populate_table(self, table, data):
         table.clear()
         if not data:
+            table.setRowCount(0)
+            table.setColumnCount(0)
             return
         headers = list(data[0].keys())
         table.setColumnCount(len(headers))
@@ -264,7 +268,6 @@ class Dashboard(QMainWindow):
         ax.figure.canvas.draw()
 
     # ---------------- EXPORT ----------------
-
     def export_csv(self, table):
         path, _ = QFileDialog.getSaveFileName(self, "CSV", "", "*.csv")
         if not path:
@@ -288,7 +291,6 @@ class Dashboard(QMainWindow):
         pdf.output(path)
 
     # ---------------- UTILS ----------------
-
     def is_date(self, val):
         try:
             datetime.fromisoformat(str(val))
@@ -302,6 +304,16 @@ class Dashboard(QMainWindow):
     def open_table_form(self, table_name):
         form = TableForm(self.db_manager, table_name)
         form.exec()
+
+    def show_welcome_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        lbl = QLabel("Welcome to SACCO Dashboard")
+        lbl.setFont(QFont("Arial", 24, QFont.Weight.Bold))
+        lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(lbl)
+        self.stack.addWidget(page)
+        self.stack.setCurrentWidget(page)
 
 
 if __name__ == "__main__":
