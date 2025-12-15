@@ -220,6 +220,8 @@ class Dashboard(QMainWindow):
         self.stack.setCurrentWidget(module_page)
         self.loaded_modules[table_name] = module_page
 
+    # --- Filtering & Chart Updates --- 
+
     def filter_and_update(self, table_widget, ax, table_name, filter_text, chart_combo):
         self.populate_table_widget(table_widget, table_name, filter_text)
         self.update_chart(ax, table_name, chart_combo.currentText())
