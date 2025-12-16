@@ -23,8 +23,11 @@ from fpdf import FPDF
 
 
 class Dashboard(QMainWindow):
-    def __init__(self, db_path, username):
+    def __init__(self, db_path, username, role="admin"):
         super().__init__()
+        self.username = username
+        self.role = role  # admin | viewer
+
         self.setWindowTitle(f"SACCO Dashboard — Logged in as {username}")
         self.setGeometry(300, 100, 1600, 950)
 
@@ -33,6 +36,7 @@ class Dashboard(QMainWindow):
 
         self.loaded_modules = {}
         self.column_filters = {}
+        self.report_presets = {}  # saved report configs
 
         self.modules_friendly = {
             "StationDB": "Stations",
@@ -100,7 +104,6 @@ class Dashboard(QMainWindow):
             self.sidebar_layout.addWidget(cat)
 
             for table in tables:
-
                 if table == "__REPORTS__":
                     btn = QPushButton("Open Reports")
                     btn.setFixedHeight(40)
@@ -130,7 +133,8 @@ class Dashboard(QMainWindow):
             "Loan Summary by Member",
             "Loans by Station",
             "Overdue Loans",
-            "Financial Totals"
+            "Financial Totals",
+            "Saved Presets"
         ]
 
         choice, ok = QInputDialog.getItem(
@@ -139,61 +143,78 @@ class Dashboard(QMainWindow):
         if not ok:
             return
 
+        if choice == "Saved Presets":
+            if not self.report_presets:
+                QMessageBox.information(self, "Presets", "No saved reports yet.")
+                return
+            preset, ok = QInputDialog.getItem(
+                self, "Presets", "Select preset:",
+                list(self.report_presets.keys()), 0, False
+            )
+            if ok:
+                self.show_aggregated_report(
+                    self.report_presets[preset]["query"], preset
+                )
+            return
+
         if choice == "Raw Table Report":
             table, ok = QInputDialog.getItem(
                 self, "Select Table",
                 "Choose table:",
                 self.db_manager.get_tables(),
-                0,
-                False
+                0, False
             )
             if ok:
                 self.reports.view_table(table, self)
 
         elif choice == "Loan Summary by Member":
-            self.show_aggregated_report(
+            self.save_and_show_report(
+                "Loan Summary by Member",
                 """
                 SELECT MemberID,
                        SUM(AmountDue) AS TotalDue,
                        SUM(AmountPaid) AS TotalPaid
                 FROM LoansAndPurchasesTbl
                 GROUP BY MemberID
-                """,
-                "Loan Summary by Member"
+                """
             )
 
         elif choice == "Loans by Station":
-            self.show_aggregated_report(
+            self.save_and_show_report(
+                "Loans by Station",
                 """
                 SELECT StationID,
                        SUM(AmountDue) AS TotalLoans
                 FROM LoansAndPurchasesTbl
                 GROUP BY StationID
-                """,
-                "Loans by Station"
+                """
             )
 
         elif choice == "Overdue Loans":
-            self.show_aggregated_report(
+            self.save_and_show_report(
+                "Overdue Loans",
                 """
                 SELECT *
                 FROM LoansAndPurchasesTbl
                 WHERE DueDate < DATE('now')
                   AND AmountPaid < AmountDue
-                """,
-                "Overdue Loans"
+                """
             )
 
         elif choice == "Financial Totals":
-            self.show_aggregated_report(
+            self.save_and_show_report(
+                "Financial Totals",
                 """
                 SELECT
                     SUM(Credit) AS TotalCredits,
                     SUM(Debit) AS TotalDebits
                 FROM LedgerTbl
-                """,
-                "Financial Totals"
+                """
             )
+
+    def save_and_show_report(self, title, query):
+        self.report_presets[title] = {"query": query}
+        self.show_aggregated_report(query, title)
 
     def show_aggregated_report(self, query, title):
         data = self.db_manager.execute_query(query)
@@ -217,6 +238,7 @@ class Dashboard(QMainWindow):
 
         btns = QHBoxLayout()
         btns.addWidget(QPushButton("Export CSV", clicked=lambda: self.export_csv(table)))
+        btns.addWidget(QPushButton("Export XLSX", clicked=lambda: self.export_xlsx(table)))
         btns.addWidget(QPushButton("Export PDF", clicked=lambda: self.export_pdf(table)))
         layout.addLayout(btns)
 
@@ -251,9 +273,10 @@ class Dashboard(QMainWindow):
         filter_layout.addWidget(chart_type)
         layout.addLayout(filter_layout)
 
-        add_btn = QPushButton("Add New Record")
-        add_btn.clicked.connect(lambda: self.open_table_form(table_name))
-        layout.addWidget(add_btn)
+        if self.role == "admin":
+            add_btn = QPushButton("Add New Record")
+            add_btn.clicked.connect(lambda: self.open_table_form(table_name))
+            layout.addWidget(add_btn)
 
         table = QTableWidget()
         table.setSortingEnabled(True)
@@ -270,6 +293,7 @@ class Dashboard(QMainWindow):
         btns = QHBoxLayout()
         btns.addWidget(QPushButton("Refresh", clicked=lambda: self.refresh(table, ax, table_name)))
         btns.addWidget(QPushButton("Export CSV", clicked=lambda: self.export_csv(table)))
+        btns.addWidget(QPushButton("Export XLSX", clicked=lambda: self.export_xlsx(table)))
         btns.addWidget(QPushButton("Export PDF", clicked=lambda: self.export_pdf(table)))
         layout.addLayout(btns)
 
@@ -404,23 +428,27 @@ class Dashboard(QMainWindow):
         if not path:
             return
 
-        df = pd.DataFrame(
-            [[table.item(r, c).text() for c in range(table.columnCount())]
-             for r in range(table.rowCount())],
-            columns=[table.horizontalHeaderItem(c).text() for c in range(table.columnCount())]
-        )
+        df = self.table_to_df(table)
         df.to_csv(path, index=False)
+
+    def export_xlsx(self, table):
+        path, _ = QFileDialog.getSaveFileName(self, "Excel", "", "*.xlsx")
+        if not path:
+            return
+
+        df = self.table_to_df(table)
+        df.to_excel(path, index=False)
 
     def export_pdf(self, table):
         path, _ = QFileDialog.getSaveFileName(self, "PDF", "", "*.pdf")
         if not path:
             return
 
-        pdf = FPDF()
+        pdf = FPDF(orientation="L")
         pdf.add_page()
         pdf.set_font("Arial", size=9)
 
-        col_width = pdf.w / table.columnCount() - 1
+        col_width = pdf.w / table.columnCount() - 2
 
         for c in range(table.columnCount()):
             pdf.cell(col_width, 8, table.horizontalHeaderItem(c).text(), 1)
@@ -432,6 +460,13 @@ class Dashboard(QMainWindow):
             pdf.ln()
 
         pdf.output(path)
+
+    def table_to_df(self, table):
+        return pd.DataFrame(
+            [[table.item(r, c).text() for c in range(table.columnCount())]
+             for r in range(table.rowCount())],
+            columns=[table.horizontalHeaderItem(c).text() for c in range(table.columnCount())]
+        )
 
     # ---------------- UTILS ----------------
 
@@ -467,6 +502,6 @@ class Dashboard(QMainWindow):
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     db_path = "C:/path/to/CooperativeDataBase.sld"
-    window = Dashboard(db_path, "okiemute")
+    window = Dashboard(db_path, "okiemute", role="admin")
     window.show()
     sys.exit(app.exec())
