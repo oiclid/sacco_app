@@ -1,17 +1,19 @@
 # dashboard.py
 import sys
 from datetime import datetime, date
+
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QMessageBox, QStackedWidget, QScrollArea, QFrame,
     QTableWidget, QTableWidgetItem, QFileDialog, QLineEdit, QComboBox,
-    QDoubleSpinBox, QDateEdit
+    QDoubleSpinBox, QDateEdit, QInputDialog
 )
 from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt, QDate
 
 from db_manager import DBManager
 from table_form import TableForm
+from modules.reports import ReportsModule
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -27,6 +29,8 @@ class Dashboard(QMainWindow):
         self.setGeometry(300, 100, 1600, 950)
 
         self.db_manager = DBManager(db_path)
+        self.reports = ReportsModule(self.db_manager)
+
         self.loaded_modules = {}
         self.column_filters = {}
 
@@ -43,7 +47,8 @@ class Dashboard(QMainWindow):
             "Accounts": ["AccountTypesTbl"],
             "Members": ["MemberDataTbl"],
             "Operations": ["StationDB", "LoansAndPurchasesTbl", "PayOrWithdrawTbl"],
-            "Finance": ["LedgerTbl"]
+            "Finance": ["LedgerTbl"],
+            "Reports": ["__REPORTS__"]
         }
 
         self.init_ui()
@@ -70,12 +75,11 @@ class Dashboard(QMainWindow):
         self.show_welcome_page()
 
     def apply_styles(self):
-        # Load QSS file
         try:
             with open("assets/styles.qss", "r") as f:
                 self.setStyleSheet(f.read())
         except FileNotFoundError:
-            print("Warning: styles.qss not found, using default styles.")
+            print("Warning: styles.qss not found")
 
     # ---------------- SIDEBAR ----------------
 
@@ -96,15 +100,20 @@ class Dashboard(QMainWindow):
             self.sidebar_layout.addWidget(cat)
 
             for table in tables:
+
+                if table == "__REPORTS__":
+                    btn = QPushButton("Open Reports")
+                    btn.setFixedHeight(40)
+                    btn.clicked.connect(self.open_reports_menu)
+                    self.sidebar_layout.addWidget(btn)
+                    continue
+
                 if table not in self.db_manager.get_tables():
                     continue
+
                 btn = QPushButton(self.modules_friendly.get(table, table))
                 btn.setFixedHeight(40)
                 btn.clicked.connect(lambda _, t=table: self.load_module(t))
-                btn.setStyleSheet("""
-                    QPushButton { background:#ffd8b1; border-radius:6px; }
-                    QPushButton:hover { background:#ffb347; }
-                """)
                 self.sidebar_layout.addWidget(btn)
 
             line = QFrame()
@@ -112,6 +121,107 @@ class Dashboard(QMainWindow):
             self.sidebar_layout.addWidget(line)
 
         self.sidebar_layout.addStretch()
+
+    # ---------------- REPORTS ----------------
+
+    def open_reports_menu(self):
+        options = [
+            "Raw Table Report",
+            "Loan Summary by Member",
+            "Loans by Station",
+            "Overdue Loans",
+            "Financial Totals"
+        ]
+
+        choice, ok = QInputDialog.getItem(
+            self, "Reports", "Select report type:", options, 0, False
+        )
+        if not ok:
+            return
+
+        if choice == "Raw Table Report":
+            table, ok = QInputDialog.getItem(
+                self, "Select Table",
+                "Choose table:",
+                self.db_manager.get_tables(),
+                0,
+                False
+            )
+            if ok:
+                self.reports.view_table(table, self)
+
+        elif choice == "Loan Summary by Member":
+            self.show_aggregated_report(
+                """
+                SELECT MemberID,
+                       SUM(AmountDue) AS TotalDue,
+                       SUM(AmountPaid) AS TotalPaid
+                FROM LoansAndPurchasesTbl
+                GROUP BY MemberID
+                """,
+                "Loan Summary by Member"
+            )
+
+        elif choice == "Loans by Station":
+            self.show_aggregated_report(
+                """
+                SELECT StationID,
+                       SUM(AmountDue) AS TotalLoans
+                FROM LoansAndPurchasesTbl
+                GROUP BY StationID
+                """,
+                "Loans by Station"
+            )
+
+        elif choice == "Overdue Loans":
+            self.show_aggregated_report(
+                """
+                SELECT *
+                FROM LoansAndPurchasesTbl
+                WHERE DueDate < DATE('now')
+                  AND AmountPaid < AmountDue
+                """,
+                "Overdue Loans"
+            )
+
+        elif choice == "Financial Totals":
+            self.show_aggregated_report(
+                """
+                SELECT
+                    SUM(Credit) AS TotalCredits,
+                    SUM(Debit) AS TotalDebits
+                FROM LedgerTbl
+                """,
+                "Financial Totals"
+            )
+
+    def show_aggregated_report(self, query, title):
+        data = self.db_manager.execute_query(query)
+        if not data:
+            QMessageBox.information(self, "Report", "No data available")
+            return
+
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        lbl = QLabel(title)
+        lbl.setFont(QFont("Arial", 18, QFont.Weight.Bold))
+        layout.addWidget(lbl)
+
+        table = QTableWidget()
+        table.setSortingEnabled(True)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        layout.addWidget(table)
+
+        self.populate_table(table, data)
+
+        btns = QHBoxLayout()
+        btns.addWidget(QPushButton("Export CSV", clicked=lambda: self.export_csv(table)))
+        btns.addWidget(QPushButton("Export PDF", clicked=lambda: self.export_pdf(table)))
+        layout.addLayout(btns)
+
+        self.stack.addWidget(page)
+        self.stack.setCurrentWidget(page)
 
     # ---------------- MODULE LOADING ----------------
 
@@ -163,8 +273,12 @@ class Dashboard(QMainWindow):
         btns.addWidget(QPushButton("Export PDF", clicked=lambda: self.export_pdf(table)))
         layout.addLayout(btns)
 
-        text_filter.textChanged.connect(lambda t: self.apply_filters(table, ax, table_name, t, chart_type))
-        chart_type.currentTextChanged.connect(lambda _: self.apply_filters(table, ax, table_name, text_filter.text(), chart_type))
+        text_filter.textChanged.connect(
+            lambda t: self.apply_filters(table, ax, table_name, t, chart_type)
+        )
+        chart_type.currentTextChanged.connect(
+            lambda _: self.apply_filters(table, ax, table_name, text_filter.text(), chart_type)
+        )
 
         self.populate_table(table, data)
         self.update_chart(ax, data, chart_type.currentText())
@@ -183,8 +297,7 @@ class Dashboard(QMainWindow):
             box = QVBoxLayout()
             box.addWidget(QLabel(col))
 
-            # Use QDoubleSpinBox for int/float to prevent overflow
-            if isinstance(sample, int) or isinstance(sample, float):
+            if isinstance(sample, (int, float)):
                 mn, mx = QDoubleSpinBox(), QDoubleSpinBox()
                 mx.setMaximum(1e12)
             elif self.is_date(sample):
@@ -234,26 +347,29 @@ class Dashboard(QMainWindow):
         table.clear()
         if not data:
             return
+
         headers = list(data[0].keys())
         table.setColumnCount(len(headers))
         table.setHorizontalHeaderLabels(headers)
         table.setRowCount(len(data))
+
         today = date.today()
 
         for r, row in enumerate(data):
             for c, h in enumerate(headers):
                 item = QTableWidgetItem(str(row[h]))
 
-                # Highlight overdue / partial payments
                 if "DueDate" in headers and "AmountPaid" in headers and "AmountDue" in headers:
                     try:
                         due = datetime.fromisoformat(row.get("DueDate")).date()
                         paid = float(row.get("AmountPaid", 0))
                         due_amount = float(row.get("AmountDue", 0))
                         if due < today and paid < due_amount:
-                            item.setBackground(Qt.GlobalColor.red)
+                            item.setProperty("overdue", True)
                         elif 0 < paid < due_amount:
-                            item.setBackground(Qt.GlobalColor.yellow)
+                            item.setProperty("partial", True)
+                        item.style().unpolish(item)
+                        item.style().polish(item)
                     except Exception:
                         pass
 
@@ -266,16 +382,19 @@ class Dashboard(QMainWindow):
         if not data:
             ax.figure.canvas.draw()
             return
+
         df = pd.DataFrame(data)
         nums = df.select_dtypes(include="number")
         if nums.empty:
             return
+
         if chart_type == "Line":
             nums.plot(ax=ax)
         elif chart_type == "Bar":
             nums.sum().plot(kind="bar", ax=ax)
         elif chart_type == "Pie":
             nums.sum().plot(kind="pie", ax=ax, autopct="%1.1f%%")
+
         ax.figure.canvas.draw()
 
     # ---------------- EXPORT ----------------
@@ -284,22 +403,34 @@ class Dashboard(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(self, "CSV", "", "*.csv")
         if not path:
             return
-        df = pd.DataFrame([[table.item(r, c).text() for c in range(table.columnCount())]
-                           for r in range(table.rowCount())],
-                          columns=[table.horizontalHeaderItem(c).text() for c in range(table.columnCount())])
+
+        df = pd.DataFrame(
+            [[table.item(r, c).text() for c in range(table.columnCount())]
+             for r in range(table.rowCount())],
+            columns=[table.horizontalHeaderItem(c).text() for c in range(table.columnCount())]
+        )
         df.to_csv(path, index=False)
 
     def export_pdf(self, table):
         path, _ = QFileDialog.getSaveFileName(self, "PDF", "", "*.pdf")
         if not path:
             return
+
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font("Arial", size=9)
+
+        col_width = pdf.w / table.columnCount() - 1
+
+        for c in range(table.columnCount()):
+            pdf.cell(col_width, 8, table.horizontalHeaderItem(c).text(), 1)
+        pdf.ln()
+
         for r in range(table.rowCount()):
             for c in range(table.columnCount()):
-                pdf.cell(40, 8, table.item(r, c).text(), 1)
+                pdf.cell(col_width, 8, table.item(r, c).text(), 1)
             pdf.ln()
+
         pdf.output(path)
 
     # ---------------- UTILS ----------------
@@ -308,7 +439,7 @@ class Dashboard(QMainWindow):
         try:
             datetime.fromisoformat(str(val))
             return True
-        except:
+        except Exception:
             return False
 
     def refresh(self, table, ax, table_name):
@@ -323,9 +454,11 @@ class Dashboard(QMainWindow):
     def show_welcome_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
+
         lbl = QLabel("Welcome to SACCO Dashboard")
         lbl.setFont(QFont("Arial", 24, QFont.Weight.Bold))
         lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
         layout.addWidget(lbl)
         self.stack.addWidget(page)
         self.stack.setCurrentWidget(page)
