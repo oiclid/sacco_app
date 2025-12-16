@@ -1,0 +1,137 @@
+/* assets/styles.qss */
+
+/* ---------------- MAIN WINDOW ---------------- */
+QMainWindow {
+    background-color: #f4f6f8;
+    font-family: Arial, sans-serif;
+    font-size: 12pt;
+    color: #2c3e50;
+}
+
+/* ---------------- LABELS ---------------- */
+QLabel {
+    color: #2c3e50;
+}
+
+QLabel#titleLabel {
+    font-size: 18pt;
+    font-weight: bold;
+}
+
+/* ---------------- BUTTONS ---------------- */
+QPushButton {
+    background-color: #ffd8b1;
+    border: 1px solid #e0a96d;
+    border-radius: 6px;
+    padding: 6px 12px;
+    font-weight: bold;
+}
+
+QPushButton:hover {
+    background-color: #ffb347;
+    cursor: pointer;
+}
+
+QPushButton:pressed {
+    background-color: #ffa64d;
+}
+
+/* ---------------- SIDEBAR ---------------- */
+QScrollArea {
+    background-color: #f4f6f8;
+    border: none;
+}
+
+QFrame {
+    background-color: #dcdcdc;
+}
+
+QVBoxLayout {
+    spacing: 5px;
+}
+
+/* ---------------- TABLE WIDGETS ---------------- */
+QTableWidget {
+    background-color: white;
+    alternate-background-color: #f9f9f9;
+    gridline-color: #e0e0e0;
+    selection-background-color: #cce5ff;
+    selection-color: #000000;
+    font-size: 11pt;
+}
+
+QTableWidget::item {
+    padding: 4px;
+}
+
+QHeaderView::section {
+    background-color: #1f77b4;
+    color: white;
+    font-weight: bold;
+    padding: 4px;
+    border: 1px solid #d0d0d0;
+}
+
+/* ---------------- OVERDUE & PARTIAL HIGHLIGHTS ---------------- */
+QTableWidget::item[overdue="true"] {
+    background-color: #ff6666; /* red for overdue */
+}
+
+QTableWidget::item[partial="true"] {
+    background-color: #ffff99; /* yellow for partial */
+}
+
+/* ---------------- INPUT FIELDS ---------------- */
+QLineEdit, QSpinBox, QDoubleSpinBox, QDateEdit, QComboBox {
+    border: 1px solid #c0c0c0;
+    border-radius: 4px;
+    padding: 4px;
+    background-color: white;
+    selection-background-color: #cce5ff;
+}
+
+/* ---------------- SCROLLBARS ---------------- */
+QScrollBar:vertical {
+    border: none;
+    background: #f0f0f0;
+    width: 12px;
+    margin: 0px 0px 0px 0px;
+}
+
+QScrollBar::handle:vertical {
+    background: #c0c0c0;
+    min-height: 20px;
+    border-radius: 6px;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0px;
+}
+
+/* ---------------- DIALOGS ---------------- */
+QDialog {
+    background-color: #f4f6f8;
+}
+
+QDialog QLabel {
+    font-size: 11pt;
+}
+
+/* ---------------- CHART / FIGURE CANVAS ---------------- */
+QWidget#FigureCanvas {
+    background-color: #f9f9f9;
+}
+
+/* ---------------- MESSAGES ---------------- */
+QMessageBox QLabel {
+    font-size: 11pt;
+}
+
+QMessageBox QPushButton {
+    min-width: 80px;
+}
+
+/* ---------------- STRETCH / LAYOUTS ---------------- */
+QWidget {
+    font-size: 11pt;
+}

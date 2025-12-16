@@ -1,7 +1,6 @@
-# dashboard.py (enhanced with UserAdmin integration)
+# dashboard.py
 import sys
-from datetime import datetime
-
+from datetime import datetime, date
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QMessageBox, QStackedWidget, QScrollArea, QFrame,
@@ -13,7 +12,6 @@ from PyQt6.QtCore import Qt, QDate
 
 from db_manager import DBManager
 from table_form import TableForm
-from user_admin import UserAdminWindow
 
 from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -38,22 +36,21 @@ class Dashboard(QMainWindow):
             "AccountTypesTbl": "Account Types",
             "LoansAndPurchasesTbl": "Loans & Purchases",
             "PayOrWithdrawTbl": "Transactions",
-            "LedgerTbl": "Ledger",
-            "UserAdmin": "User Management"  # new admin module
+            "LedgerTbl": "Ledger"
         }
 
         self.categories = {
             "Accounts": ["AccountTypesTbl"],
             "Members": ["MemberDataTbl"],
             "Operations": ["StationDB", "LoansAndPurchasesTbl", "PayOrWithdrawTbl"],
-            "Finance": ["LedgerTbl"],
-            "Admin": ["UserAdmin"]  # admin category
+            "Finance": ["LedgerTbl"]
         }
 
         self.init_ui()
         self.apply_styles()
 
     # ---------------- UI SETUP ----------------
+
     def init_ui(self):
         main_widget = QWidget()
         main_layout = QHBoxLayout(main_widget)
@@ -73,14 +70,15 @@ class Dashboard(QMainWindow):
         self.show_welcome_page()
 
     def apply_styles(self):
-        self.setStyleSheet("""
-            QMainWindow { background-color: #f4f6f8; }
-            QLabel { color: #2c3e50; }
-            QPushButton { font-weight: bold; }
-            QTableWidget { background-color: white; alternate-background-color: #f9f9f9; }
-        """)
+        # Load QSS file
+        try:
+            with open("assets/styles.qss", "r") as f:
+                self.setStyleSheet(f.read())
+        except FileNotFoundError:
+            print("Warning: styles.qss not found, using default styles.")
 
     # ---------------- SIDEBAR ----------------
+
     def build_sidebar(self):
         while self.sidebar_layout.count():
             w = self.sidebar_layout.takeAt(0).widget()
@@ -98,8 +96,7 @@ class Dashboard(QMainWindow):
             self.sidebar_layout.addWidget(cat)
 
             for table in tables:
-                # For database tables, check existence; for admin modules, allow directly
-                if table != "UserAdmin" and table not in self.db_manager.get_tables():
+                if table not in self.db_manager.get_tables():
                     continue
                 btn = QPushButton(self.modules_friendly.get(table, table))
                 btn.setFixedHeight(40)
@@ -117,13 +114,8 @@ class Dashboard(QMainWindow):
         self.sidebar_layout.addStretch()
 
     # ---------------- MODULE LOADING ----------------
-    def load_module(self, table_name):
-        # Admin module: open in separate window
-        if table_name == "UserAdmin":
-            self.user_admin_window = UserAdminWindow(self.db_manager)
-            self.user_admin_window.show()
-            return
 
+    def load_module(self, table_name):
         if table_name in self.loaded_modules:
             self.stack.setCurrentWidget(self.loaded_modules[table_name])
             return
@@ -181,10 +173,12 @@ class Dashboard(QMainWindow):
         self.stack.setCurrentWidget(page)
         self.loaded_modules[table_name] = page
 
-    # ---------------- FILTERS / TABLE / CHART / EXPORT / UTILS ----------------
+    # ---------------- FILTERS ----------------
+
     def build_column_filters(self, data, table, table_name):
         layout = QHBoxLayout()
         self.column_filters[table_name] = {}
+
         for col, sample in data[0].items():
             box = QVBoxLayout()
             box.addWidget(QLabel(col))
@@ -205,48 +199,69 @@ class Dashboard(QMainWindow):
                 continue
 
             for w in (mn, mx):
-                if isinstance(w, (QSpinBox, QDoubleSpinBox)):
-                    w.valueChanged.connect(lambda _, t=table_name: self.apply_filters(table, None, t))
-                elif isinstance(w, QDateEdit):
+                w.valueChanged.connect(lambda _, t=table_name: self.apply_filters(table, None, t))
+                if isinstance(w, QDateEdit):
                     w.dateChanged.connect(lambda _, t=table_name: self.apply_filters(table, None, t))
 
             box.addWidget(mn)
             box.addWidget(mx)
             layout.addLayout(box)
             self.column_filters[table_name][col] = (mn, mx)
+
         return layout
 
     def apply_filters(self, table, ax, table_name, text="", chart_type=None):
         data = self.db_manager.fetch_all(table_name)
         df = pd.DataFrame(data)
+
         if text:
             df = df[df.apply(lambda r: r.astype(str).str.contains(text, case=False).any(), axis=1)]
+
         for col, (mn, mx) in self.column_filters.get(table_name, {}).items():
             if isinstance(mn, QSpinBox):
                 df = df[(df[col] >= mn.value()) & (df[col] <= mx.value())]
             elif isinstance(mn, QDoubleSpinBox):
                 df = df[(df[col] >= mn.value()) & (df[col] <= mx.value())]
             elif isinstance(mn, QDateEdit):
-                df[col] = pd.to_datetime(df[col], errors='coerce')
+                df[col] = pd.to_datetime(df[col], errors="coerce")
                 df = df[(df[col] >= pd.to_datetime(mn.date().toPyDate())) &
                         (df[col] <= pd.to_datetime(mx.date().toPyDate()))]
+
         self.populate_table(table, df.to_dict("records"))
         if ax and chart_type:
-            self.update_chart(ax, df.to_dict("records"), chart_type.currentText() if hasattr(chart_type, "currentText") else chart_type)
+            self.update_chart(ax, df.to_dict("records"), chart_type.currentText())
+
+    # ---------------- TABLE & CHART ----------------
 
     def populate_table(self, table, data):
         table.clear()
         if not data:
-            table.setRowCount(0)
-            table.setColumnCount(0)
             return
         headers = list(data[0].keys())
         table.setColumnCount(len(headers))
         table.setHorizontalHeaderLabels(headers)
         table.setRowCount(len(data))
+        today = date.today()
+
         for r, row in enumerate(data):
             for c, h in enumerate(headers):
-                table.setItem(r, c, QTableWidgetItem(str(row[h])))
+                item = QTableWidgetItem(str(row[h]))
+
+                # Highlight overdue / partial payments
+                if "DueDate" in headers and "AmountPaid" in headers and "AmountDue" in headers:
+                    try:
+                        due = datetime.fromisoformat(row.get("DueDate")).date()
+                        paid = float(row.get("AmountPaid", 0))
+                        due_amount = float(row.get("AmountDue", 0))
+                        if due < today and paid < due_amount:
+                            item.setBackground(Qt.GlobalColor.red)
+                        elif 0 < paid < due_amount:
+                            item.setBackground(Qt.GlobalColor.yellow)
+                    except Exception:
+                        pass
+
+                table.setItem(r, c, item)
+
         table.resizeColumnsToContents()
 
     def update_chart(self, ax, data, chart_type):
@@ -265,6 +280,8 @@ class Dashboard(QMainWindow):
         elif chart_type == "Pie":
             nums.sum().plot(kind="pie", ax=ax, autopct="%1.1f%%")
         ax.figure.canvas.draw()
+
+    # ---------------- EXPORT ----------------
 
     def export_csv(self, table):
         path, _ = QFileDialog.getSaveFileName(self, "CSV", "", "*.csv")
@@ -288,6 +305,8 @@ class Dashboard(QMainWindow):
             pdf.ln()
         pdf.output(path)
 
+    # ---------------- UTILS ----------------
+
     def is_date(self, val):
         try:
             datetime.fromisoformat(str(val))
@@ -301,6 +320,8 @@ class Dashboard(QMainWindow):
     def open_table_form(self, table_name):
         form = TableForm(self.db_manager, table_name)
         form.exec()
+
+    # ---------------- WELCOME PAGE ----------------
 
     def show_welcome_page(self):
         page = QWidget()
