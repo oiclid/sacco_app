@@ -5,7 +5,7 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QMessageBox, QStackedWidget, QScrollArea, QFrame,
     QTableWidget, QTableWidgetItem, QFileDialog, QLineEdit, QComboBox,
-    QSpinBox, QDoubleSpinBox, QDateEdit
+    QDoubleSpinBox, QDateEdit
 )
 from PyQt6.QtGui import QFont
 from PyQt6.QtCore import Qt, QDate
@@ -183,12 +183,10 @@ class Dashboard(QMainWindow):
             box = QVBoxLayout()
             box.addWidget(QLabel(col))
 
-            if isinstance(sample, int):
-                mn, mx = QSpinBox(), QSpinBox()
-                mx.setMaximum(10**12)
-            elif isinstance(sample, float):
+            # Use QDoubleSpinBox for int/float to prevent overflow
+            if isinstance(sample, int) or isinstance(sample, float):
                 mn, mx = QDoubleSpinBox(), QDoubleSpinBox()
-                mx.setMaximum(10**12)
+                mx.setMaximum(1e12)
             elif self.is_date(sample):
                 mn, mx = QDateEdit(), QDateEdit()
                 mn.setCalendarPopup(True)
@@ -199,7 +197,8 @@ class Dashboard(QMainWindow):
                 continue
 
             for w in (mn, mx):
-                w.valueChanged.connect(lambda _, t=table_name: self.apply_filters(table, None, t))
+                if hasattr(w, "valueChanged"):
+                    w.valueChanged.connect(lambda _, t=table_name: self.apply_filters(table, None, t))
                 if isinstance(w, QDateEdit):
                     w.dateChanged.connect(lambda _, t=table_name: self.apply_filters(table, None, t))
 
@@ -218,9 +217,7 @@ class Dashboard(QMainWindow):
             df = df[df.apply(lambda r: r.astype(str).str.contains(text, case=False).any(), axis=1)]
 
         for col, (mn, mx) in self.column_filters.get(table_name, {}).items():
-            if isinstance(mn, QSpinBox):
-                df = df[(df[col] >= mn.value()) & (df[col] <= mx.value())]
-            elif isinstance(mn, QDoubleSpinBox):
+            if isinstance(mn, QDoubleSpinBox):
                 df = df[(df[col] >= mn.value()) & (df[col] <= mx.value())]
             elif isinstance(mn, QDateEdit):
                 df[col] = pd.to_datetime(df[col], errors="coerce")

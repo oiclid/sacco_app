@@ -29,7 +29,6 @@ QPushButton {
 
 QPushButton:hover {
     background-color: #ffb347;
-    cursor: pointer;
 }
 
 QPushButton:pressed {
